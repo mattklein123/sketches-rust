@@ -13,7 +13,7 @@ pub use collapsing_highest::CollapsingHighestDenseStore;
 pub use collapsing_lowest::CollapsingLowestDenseStore;
 pub use unbounded::UnboundedSizeDenseStore;
 
-pub trait Store {
+pub trait Store: Send + Sync {
     fn add(&mut self, index: i32, count: f64);
     fn add_bin(&mut self, bin: (i32, f64));
     fn merge_with(&mut self, bins: Vec<(i32, f64)>) {
