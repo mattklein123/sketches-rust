@@ -2,13 +2,13 @@ use crate::error::Error;
 use std::io::ErrorKind;
 
 pub struct Input<'a> {
-    vec: &'a Vec<u8>,
+    vec: &'a [u8],
     pos: usize,
     end: usize,
 }
 
 impl<'a> Input<'a> {
-    pub fn wrap(vec: &'a Vec<u8>) -> Input {
+    pub fn wrap(vec: &'a [u8]) -> Input {
         Input {
             pos: 0,
             end: vec.len(),

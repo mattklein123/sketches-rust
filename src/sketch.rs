@@ -170,7 +170,7 @@ impl DDSketch {
         None
     }
 
-    pub fn decode_and_merge_with(&mut self, bytes: &Vec<u8>) -> Result<(), Error> {
+    pub fn decode_and_merge_with(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let mut input = Input::wrap(bytes);
         while input.has_remaining() {
             let flag = Flag::decode(&mut input)?;
@@ -237,7 +237,7 @@ impl DDSketch {
         Ok(output.trim())
     }
 
-    pub fn decode(bytes: &Vec<u8>) -> Result<DDSketch, Error> {
+    pub fn decode(bytes: &[u8]) -> Result<DDSketch, Error> {
         let mut input = Input::wrap(bytes);
         let mut positive_value_store = UnboundedSizeDenseStore::new();
         let mut negative_value_store = UnboundedSizeDenseStore::new();
