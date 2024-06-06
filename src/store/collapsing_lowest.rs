@@ -285,20 +285,6 @@ impl Store for CollapsingLowestDenseStore {
         bins
     }
 
-    fn get_ascending_stream(&self) -> Vec<(i32, f64)> {
-        let mut bins = Vec::new();
-        let mut index = self.min_index;
-        while index <= self.max_index {
-            let value = self.counts[(index - self.offset) as usize];
-            if value > 0.0 {
-                let bin = (index, value);
-                bins.push(bin);
-            }
-            index -= 1;
-        }
-        bins
-    }
-
     fn get_descending_iter(&self) -> StoreIter {
         StoreIter::new(
             self.min_index,

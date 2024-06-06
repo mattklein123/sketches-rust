@@ -1,20 +1,18 @@
 use crate::error::Error;
-use crate::index_mapping::IndexMappingLayout::{LogCubic, LOG};
+use crate::index_mapping::IndexMappingLayout::LOG;
 use crate::index_mapping::{IndexMapping, IndexMappingLayout};
 use crate::input::Input;
 use crate::output::Output;
 use crate::serde;
-use crate::store::{
-    BinEncodingMode, CollapsingHighestDenseStore, CollapsingLowestDenseStore, Store,
-    UnboundedSizeDenseStore,
-};
+use crate::store::{BinEncodingMode, CollapsingLowestDenseStore, Store};
 
+#[derive(Clone)]
 pub struct DDSketch {
     index_mapping: IndexMapping,
     min_indexed_value: f64,
     max_indexed_value: f64,
-    negative_value_store: Box<dyn Store>,
-    positive_value_store: Box<dyn Store>,
+    negative_value_store: CollapsingLowestDenseStore,
+    positive_value_store: CollapsingLowestDenseStore,
     zero_count: f64,
 }
 
@@ -236,123 +234,10 @@ impl DDSketch {
 
         Ok(output.trim())
     }
-
-    pub fn decode(bytes: &[u8]) -> Result<DDSketch, Error> {
-        let mut input = Input::wrap(bytes);
-        let mut positive_value_store = UnboundedSizeDenseStore::new();
-        let mut negative_value_store = UnboundedSizeDenseStore::new();
-        let mut index_mapping = None;
-        let mut zero_count = 0.0;
-        while input.has_remaining() {
-            let flag = Flag::decode(&mut input)?;
-            let flag_type = flag.get_type()?;
-            match flag_type {
-                FlagType::PositiveStore => {
-                    let mode = BinEncodingMode::of_flag(flag.get_marker())?;
-                    positive_value_store.decode_and_merge_with(&mut input, mode)?;
-                }
-                FlagType::NegativeStore => {
-                    let mode = BinEncodingMode::of_flag(flag.get_marker())?;
-                    negative_value_store.decode_and_merge_with(&mut input, mode)?;
-                }
-                FlagType::IndexMapping => {
-                    let layout = IndexMappingLayout::of_flag(&flag)?;
-                    let gamma = input.read_double_le()?;
-                    let index_offset = input.read_double_le()?;
-                    index_mapping = Some(IndexMapping::with_gamma_offset(
-                        layout,
-                        gamma,
-                        index_offset,
-                    )?);
-                }
-                FlagType::SketchFeatures => {
-                    if Flag::ZERO_COUNT == flag {
-                        zero_count += serde::decode_var_double(&mut input)?;
-                    } else {
-                        serde::ignore_exact_summary_statistic_flags(&mut input, flag)?;
-                    }
-                }
-            }
-        }
-
-        match index_mapping {
-            Some(mapping) => {
-                let min_indexed_value = f64::max(0.0, mapping.min_indexable_value());
-                let max_indexed_value = mapping.max_indexable_value();
-                Ok(DDSketch {
-                    index_mapping: mapping,
-                    negative_value_store: Box::new(negative_value_store),
-                    positive_value_store: Box::new(positive_value_store),
-                    min_indexed_value,
-                    max_indexed_value,
-                    zero_count,
-                })
-            }
-            None => Err(Error::InvalidArgument("No IndexMapping decoded")),
-        }
-    }
 }
 
 // factory methods
 impl DDSketch {
-    pub fn collapsing_lowest_dense(
-        relative_accuracy: f64,
-        max_num_bins: usize,
-    ) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LogCubic, relative_accuracy)?;
-        let negative_value_store = CollapsingLowestDenseStore::with_capacity(max_num_bins)?;
-        let positive_value_store = CollapsingLowestDenseStore::with_capacity(max_num_bins)?;
-        let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());
-        let max_indexed_value = index_mapping.max_indexable_value();
-        let zero_count = 0.0;
-
-        Ok(DDSketch {
-            index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
-            min_indexed_value,
-            max_indexed_value,
-            zero_count,
-        })
-    }
-
-    pub fn collapsing_highest_dense(
-        relative_accuracy: f64,
-        max_num_bins: usize,
-    ) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LogCubic, relative_accuracy)?;
-        let negative_value_store = CollapsingHighestDenseStore::with_capacity(max_num_bins)?;
-        let positive_value_store = CollapsingHighestDenseStore::with_capacity(max_num_bins)?;
-        let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());
-        let max_indexed_value = index_mapping.max_indexable_value();
-        let zero_count = 0.0;
-        Ok(DDSketch {
-            index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
-            min_indexed_value,
-            max_indexed_value,
-            zero_count,
-        })
-    }
-
-    pub fn unbounded_dense(relative_accuracy: f64) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LogCubic, relative_accuracy)?;
-        let negative_value_store = UnboundedSizeDenseStore::new();
-        let positive_value_store = UnboundedSizeDenseStore::new();
-        let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());
-        let max_indexed_value = index_mapping.max_indexable_value();
-        let zero_count = 0.0;
-        Ok(DDSketch {
-            index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
-            min_indexed_value,
-            max_indexed_value,
-            zero_count,
-        })
-    }
-
     pub fn logarithmic_collapsing_lowest_dense(
         relative_accuracy: f64,
         max_num_bins: usize,
@@ -365,47 +250,8 @@ impl DDSketch {
         let zero_count = 0.0;
         Ok(DDSketch {
             index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
-            min_indexed_value,
-            max_indexed_value,
-            zero_count,
-        })
-    }
-
-    pub fn logarithmic_collapsing_highest_dense(
-        relative_accuracy: f64,
-        max_num_bins: usize,
-    ) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LOG, relative_accuracy)?;
-        let negative_value_store = CollapsingHighestDenseStore::with_capacity(max_num_bins)?;
-        let positive_value_store = CollapsingHighestDenseStore::with_capacity(max_num_bins)?;
-        let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());
-        let max_indexed_value = index_mapping.max_indexable_value();
-        let zero_count = 0.0;
-        Ok(DDSketch {
-            index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
-            min_indexed_value,
-            max_indexed_value,
-            zero_count,
-        })
-    }
-
-    pub fn logarithmic_unbounded_size_dense_store(
-        relative_accuracy: f64,
-    ) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LOG, relative_accuracy)?;
-        let negative_value_store = UnboundedSizeDenseStore::new();
-        let positive_value_store = UnboundedSizeDenseStore::new();
-        let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());
-        let max_indexed_value = index_mapping.max_indexable_value();
-        let zero_count = 0.0;
-        Ok(DDSketch {
-            index_mapping,
-            negative_value_store: Box::new(negative_value_store),
-            positive_value_store: Box::new(positive_value_store),
+            negative_value_store,
+            positive_value_store,
             min_indexed_value,
             max_indexed_value,
             zero_count,

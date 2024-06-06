@@ -2,16 +2,12 @@ use crate::error::Error;
 use crate::input::Input;
 use crate::serde;
 
-mod collapsing_highest;
 mod collapsing_lowest;
-mod unbounded;
 
 use crate::index_mapping::IndexMapping;
 use crate::output::Output;
 use crate::sketch::{Flag, FlagType};
-pub use collapsing_highest::CollapsingHighestDenseStore;
 pub use collapsing_lowest::CollapsingLowestDenseStore;
-pub use unbounded::UnboundedSizeDenseStore;
 
 pub trait Store: Send + Sync {
     fn add(&mut self, index: i32, count: f64);
@@ -140,7 +136,6 @@ pub trait Store: Send + Sync {
         }
     }
     fn get_descending_stream(&self) -> Vec<(i32, f64)>;
-    fn get_ascending_stream(&self) -> Vec<(i32, f64)>;
     fn get_descending_iter(&self) -> StoreIter;
     fn get_ascending_iter(&self) -> StoreIter;
     fn get_sum(&self, index_mapping: &IndexMapping) -> f64 {
@@ -272,34 +267,6 @@ mod tests {
         }
         assert_eq!(95, store.get_max_index());
         assert_eq!(86, store.get_min_index());
-        assert_eq!(20.0, store.get_total_count());
-    }
-
-    #[test]
-    fn test_collapsing_highest_dense_store_add() {
-        let mut store = CollapsingHighestDenseStore::with_capacity(10).unwrap();
-        let indexes = vec![
-            40, 22, 42, 79, 33, 62, 14, 79, 98, 76, 83, 31, 3, 92, 79, 6, 76, 56, 79, 6,
-        ];
-        for i in indexes {
-            store.add(i, 1.0);
-        }
-        assert_eq!(12, store.get_max_index());
-        assert_eq!(3, store.get_min_index());
-        assert_eq!(20.0, store.get_total_count());
-    }
-
-    #[test]
-    fn test_unbounded_size_dense_store_add() {
-        let mut store = UnboundedSizeDenseStore::new();
-        let indexes = vec![
-            17, 32, 6, 42, 24, 75, 56, 58, 28, 10, 76, 43, 90, 59, 17, 17, 34, 47, 56, 32,
-        ];
-        for i in indexes {
-            store.add(i, 1.0);
-        }
-        assert_eq!(90, store.get_max_index());
-        assert_eq!(6, store.get_min_index());
         assert_eq!(20.0, store.get_total_count());
     }
 }

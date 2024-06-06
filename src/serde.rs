@@ -3,12 +3,6 @@ use crate::input::*;
 use crate::output::Output;
 use crate::sketch::Flag;
 
-const SIGNIFICAND_WIDTH: i64 = 53;
-const SIGNIFICAND_MASK: i64 = 0x000fffffffffffff;
-const EXPONENT_MASK: i64 = 0x7FF0000000000000;
-const EXPONENT_SHIFT: i64 = SIGNIFICAND_WIDTH - 1;
-const EXPONENT_BIAS: i64 = 1023;
-const ONE: i64 = 0x3ff0000000000000;
 const VAR_DOUBLE_ROTATE_DISTANCE: u32 = 6;
 const UNSIGNED_VAR_LONG_LENGTHS: [i64; 65] = [
     9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5,
@@ -70,22 +64,6 @@ pub fn i32_to_usize_exact(value: i32) -> Result<usize, Error> {
         return Err(Error::InvalidArgument("Value should be grate than 0."));
     }
     Ok(value as usize)
-}
-
-pub fn get_exponent(long_bits: i64) -> i64 {
-    ((long_bits & EXPONENT_MASK) >> EXPONENT_SHIFT) - EXPONENT_BIAS
-}
-
-pub fn get_significand_plus_one(long_bits: i64) -> f64 {
-    let raw = (long_bits & SIGNIFICAND_MASK) | ONE;
-    f64::from_bits(raw as u64)
-}
-
-pub fn build_double(exponent: i64, significand_plus_one: f64) -> f64 {
-    let significand_plus_one = 1.0_f64.max(significand_plus_one);
-    let raw = (((exponent + EXPONENT_BIAS) << EXPONENT_SHIFT) & EXPONENT_MASK)
-        | (f64::to_bits(significand_plus_one) as i64 & SIGNIFICAND_MASK);
-    f64::from_bits(raw as u64)
 }
 
 fn zig_zag_decode(value: i64) -> i64 {
@@ -494,10 +472,5 @@ mod tests {
             encode_signed_var_long(&mut output, value.0).unwrap();
             assert_eq!(value.1, output.trim());
         }
-    }
-
-    #[test]
-    fn test_build_double() {
-        assert_eq!(build_double(0, 1.0), 1.0);
     }
 }
