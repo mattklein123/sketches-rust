@@ -15,11 +15,11 @@ const VAR_DOUBLE_LENGTHS: [i64; 65] = [
     1,
 ];
 
-pub fn decode_signed_var_long(input: &mut Input) -> Result<i64, Error> {
+pub fn decode_signed_var_long(input: &mut Input<'_>) -> Result<i64, Error> {
     Ok(zig_zag_decode(decode_unsigned_var_long(input)?))
 }
 
-pub fn decode_unsigned_var_long(input: &mut Input) -> Result<i64, Error> {
+pub fn decode_unsigned_var_long(input: &mut Input<'_>) -> Result<i64, Error> {
     let mut value: i64 = 0;
     let mut shift = 0;
     loop {
@@ -32,7 +32,7 @@ pub fn decode_unsigned_var_long(input: &mut Input) -> Result<i64, Error> {
     }
 }
 
-pub fn decode_var_double(input: &mut Input) -> Result<f64, Error> {
+pub fn decode_var_double(input: &mut Input<'_>) -> Result<f64, Error> {
     let mut bits: i64 = 0;
     let mut shift = 8 * 8 - 7;
     loop {
@@ -74,7 +74,10 @@ fn var_bits_to_double(bits: i64) -> f64 {
     f64::from_bits((i64::rotate_right(bits, 6) + f64::to_bits(1.0) as i64) as u64) - 1.0
 }
 
-pub fn ignore_exact_summary_statistic_flags(input: &mut Input, flag: Flag) -> Result<(), Error> {
+pub fn ignore_exact_summary_statistic_flags(
+    input: &mut Input<'_>,
+    flag: Flag,
+) -> Result<(), Error> {
     if flag == Flag::COUNT {
         decode_var_double(input)?;
         Ok(())

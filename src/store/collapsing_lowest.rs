@@ -285,7 +285,7 @@ impl Store for CollapsingLowestDenseStore {
         bins
     }
 
-    fn get_descending_iter(&self) -> StoreIter {
+    fn get_descending_iter(&self) -> StoreIter<'_> {
         StoreIter::new(
             self.min_index,
             self.max_index,
@@ -295,7 +295,7 @@ impl Store for CollapsingLowestDenseStore {
         )
     }
 
-    fn get_ascending_iter(&self) -> StoreIter {
+    fn get_ascending_iter(&self) -> StoreIter<'_> {
         StoreIter::new(
             self.min_index,
             self.max_index,

@@ -8,7 +8,7 @@ pub struct Input<'a> {
 }
 
 impl<'a> Input<'a> {
-    pub fn wrap(vec: &'a [u8]) -> Input {
+    pub fn wrap(vec: &'a [u8]) -> Input<'_> {
         Input {
             pos: 0,
             end: vec.len(),
