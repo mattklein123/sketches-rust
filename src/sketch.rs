@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "./sketch_test.rs"]
+mod sketch_test;
+
 use crate::error::Error;
 use crate::index_mapping::IndexMappingLayout::LOG;
 use crate::index_mapping::{IndexMapping, IndexMappingLayout};
@@ -21,6 +25,7 @@ pub struct Flag {
     marker: u8,
 }
 
+#[derive(PartialEq)]
 pub enum FlagType {
     SketchFeatures = 0b00,
     PositiveStore = 0b01,
@@ -168,6 +173,50 @@ impl DDSketch {
         None
     }
 
+    #[cfg(test)]
+    pub fn decode_clickhouse_and_merge_with(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let mut input = Input::wrap(bytes);
+
+        // Index mapping.
+        let flag = Flag::decode(&mut input)?;
+        let layout = IndexMappingLayout::of_flag(&flag)?;
+        let gamma = input.read_double_le()?;
+        let index_offset = input.read_double_le()?;
+        let decoded_index_mapping = IndexMapping::with_gamma_offset(layout, gamma, index_offset)?;
+        if self.index_mapping != decoded_index_mapping {
+            return Err(Error::InvalidArgument("Unmatched IndexMapping"));
+        }
+
+        // Positive store.
+        let flag = Flag::decode(&mut input)?;
+        if flag.get_type()? != FlagType::PositiveStore {
+            return Err(Error::InvalidArgument("Expected positive store"));
+        }
+        let flag = Flag::decode(&mut input)?;
+        let mode = BinEncodingMode::of_flag(flag.get_marker())?;
+        self.positive_value_store
+            .decode_and_merge_with(&mut input, mode, true)?;
+
+        // Negative store.
+        let flag = Flag::decode(&mut input)?;
+        if flag.get_type()? != FlagType::NegativeStore {
+            return Err(Error::InvalidArgument("Expected negative store"));
+        }
+        let flag = Flag::decode(&mut input)?;
+        let mode = BinEncodingMode::of_flag(flag.get_marker())?;
+        self.negative_value_store
+            .decode_and_merge_with(&mut input, mode, true)?;
+
+        // Zero count.
+        let flag = Flag::decode(&mut input)?;
+        if flag != Flag::ZERO_COUNT {
+            return Err(Error::InvalidArgument("Expected zero count"));
+        }
+        self.zero_count += input.read_double_le()?;
+
+        Ok(())
+    }
+
     pub fn decode_and_merge_with(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let mut input = Input::wrap(bytes);
         while input.has_remaining() {
@@ -177,12 +226,12 @@ impl DDSketch {
                 FlagType::PositiveStore => {
                     let mode = BinEncodingMode::of_flag(flag.get_marker())?;
                     self.positive_value_store
-                        .decode_and_merge_with(&mut input, mode)?;
+                        .decode_and_merge_with(&mut input, mode, false)?;
                 }
                 FlagType::NegativeStore => {
                     let mode = BinEncodingMode::of_flag(flag.get_marker())?;
                     self.negative_value_store
-                        .decode_and_merge_with(&mut input, mode)?;
+                        .decode_and_merge_with(&mut input, mode, false)?;
                 }
                 FlagType::IndexMapping => {
                     let layout = IndexMappingLayout::of_flag(&flag)?;
@@ -228,9 +277,38 @@ impl DDSketch {
         }
 
         self.positive_value_store
-            .encode(&mut output, FlagType::PositiveStore)?;
+            .encode(&mut output, FlagType::PositiveStore, false)?;
         self.negative_value_store
-            .encode(&mut output, FlagType::NegativeStore)?;
+            .encode(&mut output, FlagType::NegativeStore, false)?;
+
+        Ok(output.trim())
+    }
+
+    // This is the format expected by the Clickhouse quantileDD aggregated type. It is loosely
+    // based on the formats used by the various DD libraries but is not exactly the same. This
+    // format is sent in binary directly to Clickhouse and must match exactly so that it can be
+    // merged via database functions. For more information on how this was reverse engineered
+    // see:
+    // 1) https://github.com/ClickHouse/ClickHouse/issues/66734
+    // 2) https://github.com/ClickHouse/ClickHouse/pull/56342
+    // 3) https://github.com/ClickHouse/ClickHouse/tree/master/src/AggregateFunctions/DDSketch
+    pub fn encode_clickhouse(&self) -> Result<Vec<u8>, Error> {
+        let mut output = Output::with_capacity(64);
+        self.index_mapping.encode(&mut output)?;
+
+        // Positive store.
+        output.write_byte(FlagType::PositiveStore as u8)?;
+        self.positive_value_store
+            .encode(&mut output, FlagType::PositiveStore, true)?;
+
+        // Negative store.
+        output.write_byte(FlagType::NegativeStore as u8)?;
+        self.negative_value_store
+            .encode(&mut output, FlagType::NegativeStore, true)?;
+
+        // Zero count.
+        Flag::ZERO_COUNT.encode(&mut output)?;
+        output.write_double_le(self.zero_count)?;
 
         Ok(output.trim())
     }
@@ -270,7 +348,7 @@ impl Flag {
         Flag { marker }
     }
 
-    pub fn decode(input: &mut Input) -> Result<Flag, Error> {
+    pub fn decode(input: &mut Input<'_>) -> Result<Flag, Error> {
         let marker = input.read_byte()?;
         Ok(Flag::new(marker))
     }

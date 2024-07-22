@@ -24,8 +24,13 @@ pub trait Store: Send + Sync {
     fn get_min_index(&self) -> i32;
     fn get_max_index(&self) -> i32;
     fn get_count(&self, i: i32) -> f64;
-    fn encode(&self, output: &mut Output, store_flag_type: FlagType) -> Result<(), Error> {
-        if self.is_empty() {
+    fn encode(
+        &self,
+        output: &mut Output,
+        store_flag_type: FlagType,
+        clickhouse: bool,
+    ) -> Result<(), Error> {
+        if self.is_empty() && !clickhouse {
             return Ok(());
         }
 
@@ -58,19 +63,35 @@ pub trait Store: Send + Sync {
         }
 
         if dense_encoding_size <= sparse_encoding_size {
-            BinEncodingMode::ContiguousCounts
-                .to_flag(store_flag_type)
-                .encode(output)?;
+            if clickhouse {
+                BinEncodingMode::ContiguousCounts
+                    .to_flag(FlagType::SketchFeatures)
+                    .encode(output)?;
+            } else {
+                BinEncodingMode::ContiguousCounts
+                    .to_flag(store_flag_type)
+                    .encode(output)?;
+            }
             serde::encode_unsigned_var_long(output, num_bins)?;
             serde::encode_signed_var_long(output, min_index as i64)?;
             serde::encode_signed_var_long(output, 1)?;
             for i in min_index - offset..max_index - offset + 1 {
-                serde::encode_var_double(output, self.get_count(i))?;
+                if clickhouse {
+                    output.write_double_le(self.get_count(i))?;
+                } else {
+                    serde::encode_var_double(output, self.get_count(i))?;
+                }
             }
         } else {
-            BinEncodingMode::IndexDeltasAndCounts
-                .to_flag(store_flag_type)
-                .encode(output)?;
+            if clickhouse {
+                BinEncodingMode::IndexDeltasAndCounts
+                    .to_flag(FlagType::SketchFeatures)
+                    .encode(output)?;
+            } else {
+                BinEncodingMode::IndexDeltasAndCounts
+                    .to_flag(store_flag_type)
+                    .encode(output)?;
+            }
             serde::encode_unsigned_var_long(output, num_non_empty_bins)?;
             let mut previous_index = 0;
             for i in min_index - offset..max_index - offset + 1 {
@@ -78,17 +99,23 @@ pub trait Store: Send + Sync {
                 if count != 0.0 {
                     let index: i64 = offset as i64 + i as i64;
                     serde::encode_signed_var_long(output, index - previous_index)?;
-                    serde::encode_var_double(output, count)?;
+                    if clickhouse {
+                        output.write_double_le(count)?;
+                    } else {
+                        serde::encode_var_double(output, count)?;
+                    }
                     previous_index = index;
                 }
             }
         }
         Ok(())
     }
+
     fn decode_and_merge_with(
         &mut self,
-        input: &mut Input,
+        input: &mut Input<'_>,
         mode: BinEncodingMode,
+        clickhouse: bool,
     ) -> Result<(), Error> {
         match mode {
             BinEncodingMode::IndexDeltasAndCounts => {
@@ -97,7 +124,11 @@ pub trait Store: Send + Sync {
                 let mut i = 0;
                 while i < num_bins {
                     let index_delta = serde::decode_signed_var_long(input)?;
-                    let count = serde::decode_var_double(input)?;
+                    let count = if clickhouse {
+                        input.read_double_le()?
+                    } else {
+                        serde::decode_var_double(input)?
+                    };
                     index += index_delta;
                     self.add(serde::i64_to_i32_exact(index)?, count);
                     i += 1;
@@ -107,6 +138,11 @@ pub trait Store: Send + Sync {
             }
 
             BinEncodingMode::IndexDeltas => {
+                if clickhouse {
+                    return Err(Error::InvalidArgument(
+                        "IndexDeltas encoding mode is not supported in ClickHouse.",
+                    ));
+                }
                 let num_bins = serde::decode_unsigned_var_long(input)?;
                 let mut index: i64 = 0;
                 let mut i = 0;
@@ -126,7 +162,11 @@ pub trait Store: Send + Sync {
 
                 let mut i = 0;
                 while i < num_bins {
-                    let count = serde::decode_var_double(input)?;
+                    let count = if clickhouse {
+                        input.read_double_le()?
+                    } else {
+                        serde::decode_var_double(input)?
+                    };
                     self.add(serde::i64_to_i32_exact(index)?, count);
                     index += index_delta;
                     i += 1;
@@ -136,8 +176,8 @@ pub trait Store: Send + Sync {
         }
     }
     fn get_descending_stream(&self) -> Vec<(i32, f64)>;
-    fn get_descending_iter(&self) -> StoreIter;
-    fn get_ascending_iter(&self) -> StoreIter;
+    fn get_descending_iter(&self) -> StoreIter<'_>;
+    fn get_ascending_iter(&self) -> StoreIter<'_>;
     fn get_sum(&self, index_mapping: &IndexMapping) -> f64 {
         let mut sum = 0.0;
         if self.is_empty() {
@@ -175,7 +215,7 @@ impl<'a> StoreIter<'a> {
         offset: i32,
         desc: bool,
         counts: &'a [f64],
-    ) -> StoreIter {
+    ) -> StoreIter<'_> {
         StoreIter {
             desc,
             min_index,

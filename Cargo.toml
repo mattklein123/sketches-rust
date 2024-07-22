@@ -11,4 +11,4 @@ description = "Rust implementation of DDSketch."
 exclude = [".gitignore"]
 
 [dependencies]
-thiserror = "1.0.60"
+thiserror = "1.0.63"
