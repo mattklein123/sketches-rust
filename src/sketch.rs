@@ -173,12 +173,12 @@ impl DDSketch {
         None
     }
 
-    #[cfg(test)]
-    pub fn decode_clickhouse_and_merge_with(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        let mut input = Input::wrap(bytes);
-
+    fn decode_clickhouse_and_merge_with_input(
+        &mut self,
+        input: &mut Input<'_>,
+    ) -> Result<(), Error> {
         // Index mapping.
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         let layout = IndexMappingLayout::of_flag(&flag)?;
         let gamma = input.read_double_le()?;
         let index_offset = input.read_double_le()?;
@@ -188,32 +188,48 @@ impl DDSketch {
         }
 
         // Positive store.
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         if flag.get_type()? != FlagType::PositiveStore {
             return Err(Error::InvalidArgument("Expected positive store"));
         }
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         let mode = BinEncodingMode::of_flag(flag.get_marker())?;
         self.positive_value_store
-            .decode_and_merge_with(&mut input, mode, true)?;
+            .decode_and_merge_with(input, mode, true)?;
 
         // Negative store.
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         if flag.get_type()? != FlagType::NegativeStore {
             return Err(Error::InvalidArgument("Expected negative store"));
         }
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         let mode = BinEncodingMode::of_flag(flag.get_marker())?;
         self.negative_value_store
-            .decode_and_merge_with(&mut input, mode, true)?;
+            .decode_and_merge_with(input, mode, true)?;
 
         // Zero count.
-        let flag = Flag::decode(&mut input)?;
+        let flag = Flag::decode(input)?;
         if flag != Flag::ZERO_COUNT {
             return Err(Error::InvalidArgument("Expected zero count"));
         }
         self.zero_count += input.read_double_le()?;
 
+        Ok(())
+    }
+
+    pub fn decode_clickhouse_and_merge_with(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let mut input = Input::wrap(bytes);
+        self.decode_clickhouse_and_merge_with_input(&mut input)
+    }
+
+    pub fn decode_clickhouse_and_merge_with_slice(
+        &mut self,
+        input: &mut &[u8],
+    ) -> Result<(), Error> {
+        let mut cursor = Input::wrap(*input);
+        self.decode_clickhouse_and_merge_with_input(&mut cursor)?;
+        let consumed = cursor.position();
+        *input = &input[consumed..];
         Ok(())
     }
 

@@ -20,6 +20,10 @@ impl<'a> Input<'a> {
         self.pos < self.end
     }
 
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     pub(crate) fn read_byte(&mut self) -> Result<u8, Error> {
         if self.pos >= self.end {
             return Err(Error::IoError(ErrorKind::UnexpectedEof));
