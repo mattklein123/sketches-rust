@@ -7,4 +7,4 @@ mod sketch;
 mod store;
 
 pub use self::error::Error;
-pub use self::sketch::DDSketch;
+pub use self::sketch::{Bucket, DDSketch};

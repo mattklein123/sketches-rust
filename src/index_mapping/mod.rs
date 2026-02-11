@@ -102,12 +102,12 @@ impl IndexMapping {
         self.lower_bound(index) * (1.0 + self.relative_accuracy())
     }
 
-    fn lower_bound(&self, index: i32) -> f64 {
+    pub(crate) fn lower_bound(&self, index: i32) -> f64 {
         self.log_inverse((index as f64 - self.index_offset()) / self.multiplier())
     }
 
     #[allow(dead_code)]
-    fn upper_bound(&self, index: i32) -> f64 {
+    pub(crate) fn upper_bound(&self, index: i32) -> f64 {
         self.lower_bound(index + 1)
     }
 

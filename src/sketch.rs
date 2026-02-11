@@ -20,6 +20,13 @@ pub struct DDSketch {
     zero_count: f64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bucket {
+    pub range_begin: f64,
+    pub range_end: f64,
+    pub count: f64,
+}
+
 #[derive(PartialEq)]
 pub struct Flag {
     marker: u8,
@@ -171,6 +178,46 @@ impl DDSketch {
         }
 
         None
+    }
+
+    pub fn get_buckets(&self) -> Vec<Bucket> {
+        let mut buckets = Vec::new();
+
+        if !self.negative_value_store.is_empty() {
+            for (index, count) in self.negative_value_store.get_descending_iter() {
+                if count == 0.0 {
+                    continue;
+                }
+                buckets.push(Bucket {
+                    range_begin: -self.index_mapping.upper_bound(index),
+                    range_end: -self.index_mapping.lower_bound(index),
+                    count,
+                });
+            }
+        }
+
+        if self.zero_count > 0.0 {
+            buckets.push(Bucket {
+                range_begin: -self.min_indexed_value,
+                range_end: self.min_indexed_value,
+                count: self.zero_count,
+            });
+        }
+
+        if !self.positive_value_store.is_empty() {
+            for (index, count) in self.positive_value_store.get_ascending_iter() {
+                if count == 0.0 {
+                    continue;
+                }
+                buckets.push(Bucket {
+                    range_begin: self.index_mapping.lower_bound(index),
+                    range_end: self.index_mapping.upper_bound(index),
+                    count,
+                });
+            }
+        }
+
+        buckets
     }
 
     fn decode_clickhouse_and_merge_with_input(
