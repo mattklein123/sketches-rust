@@ -3,7 +3,7 @@
 mod sketch_test;
 
 use crate::error::Error;
-use crate::index_mapping::IndexMappingLayout::LOG;
+use crate::index_mapping::IndexMappingLayout::Log;
 use crate::index_mapping::{IndexMapping, IndexMappingLayout};
 use crate::input::Input;
 use crate::output::Output;
@@ -32,7 +32,7 @@ pub struct Flag {
     marker: u8,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum FlagType {
     SketchFeatures = 0b00,
     PositiveStore = 0b01,
@@ -41,12 +41,28 @@ pub enum FlagType {
 }
 
 impl DDSketch {
+    fn validate_zero_count(zero_count: f64) -> Result<(), Error> {
+        if !zero_count.is_finite() || zero_count < 0.0 {
+            return Err(Error::InvalidArgument("Invalid zero count."));
+        }
+
+        Ok(())
+    }
+
+    fn validate_total_count(&self) -> Result<(), Error> {
+        if !self.get_count().is_finite() {
+            return Err(Error::InvalidArgument("Invalid total count."));
+        }
+
+        Ok(())
+    }
+
     pub fn accept(&mut self, value: f64) {
         self.accept_with_count(value, 1.0);
     }
 
     pub fn accept_with_count(&mut self, value: f64, count: f64) {
-        if count < 0.0 {
+        if !value.is_finite() || !count.is_finite() || count <= 0.0 {
             return;
         }
 
@@ -56,12 +72,12 @@ impl DDSketch {
 
         if value > self.min_indexed_value {
             self.positive_value_store
-                .add(self.index_mapping.index(value), 1.0);
+                .add(self.index_mapping.index(value), count);
         } else if value < -self.min_indexed_value {
             self.negative_value_store
-                .add(self.index_mapping.index(-value), 1.0);
+                .add(self.index_mapping.index(-value), count);
         } else {
-            self.zero_count += 1.0;
+            self.zero_count += count;
         }
     }
 
@@ -77,7 +93,7 @@ impl DDSketch {
         self.zero_count = 0.0;
     }
 
-    pub fn get_count(&mut self) -> f64 {
+    pub fn get_count(&self) -> f64 {
         self.zero_count
             + self.negative_value_store.get_total_count()
             + self.positive_value_store.get_total_count()
@@ -259,7 +275,10 @@ impl DDSketch {
         if flag != Flag::ZERO_COUNT {
             return Err(Error::InvalidArgument("Expected zero count"));
         }
-        self.zero_count += input.read_double_le()?;
+        let zero_count = input.read_double_le()?;
+        Self::validate_zero_count(zero_count)?;
+        self.zero_count += zero_count;
+        self.validate_total_count()?;
 
         Ok(())
     }
@@ -273,7 +292,7 @@ impl DDSketch {
         &mut self,
         input: &mut &[u8],
     ) -> Result<(), Error> {
-        let mut cursor = Input::wrap(*input);
+        let mut cursor = Input::wrap(input);
         self.decode_clickhouse_and_merge_with_input(&mut cursor)?;
         let consumed = cursor.position();
         *input = &input[consumed..];
@@ -308,13 +327,16 @@ impl DDSketch {
                 }
                 FlagType::SketchFeatures => {
                     if Flag::ZERO_COUNT == flag {
-                        self.zero_count += serde::decode_var_double(&mut input)?;
+                        let zero_count = serde::decode_var_double(&mut input)?;
+                        Self::validate_zero_count(zero_count)?;
+                        self.zero_count += zero_count;
                     } else {
                         serde::ignore_exact_summary_statistic_flags(&mut input, flag)?;
                     }
                 }
             }
         }
+        self.validate_total_count()?;
         Ok(())
     }
 
@@ -327,14 +349,18 @@ impl DDSketch {
         self.positive_value_store
             .merge_with(other.positive_value_store.get_descending_stream());
         self.zero_count += other.zero_count;
+        Self::validate_zero_count(self.zero_count)?;
+        self.validate_total_count()?;
         Ok(())
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut output = Output::with_capacity(64);
+        self.validate_total_count()?;
         self.index_mapping.encode(&mut output)?;
 
         if self.zero_count != 0.0 {
+            Self::validate_zero_count(self.zero_count)?;
             Flag::ZERO_COUNT.encode(&mut output)?;
             serde::encode_var_double(&mut output, self.zero_count)?;
         }
@@ -357,7 +383,9 @@ impl DDSketch {
     // 3) https://github.com/ClickHouse/ClickHouse/tree/master/src/AggregateFunctions/DDSketch
     pub fn encode_clickhouse(&self) -> Result<Vec<u8>, Error> {
         let mut output = Output::with_capacity(64);
+        self.validate_total_count()?;
         self.index_mapping.encode(&mut output)?;
+        Self::validate_zero_count(self.zero_count)?;
 
         // Positive store.
         output.write_byte(FlagType::PositiveStore as u8)?;
@@ -383,7 +411,7 @@ impl DDSketch {
         relative_accuracy: f64,
         max_num_bins: usize,
     ) -> Result<DDSketch, Error> {
-        let index_mapping = IndexMapping::with_relative_accuracy(LOG, relative_accuracy)?;
+        let index_mapping = IndexMapping::with_relative_accuracy(Log, relative_accuracy)?;
         let negative_value_store = CollapsingLowestDenseStore::with_capacity(max_num_bins)?;
         let positive_value_store = CollapsingLowestDenseStore::with_capacity(max_num_bins)?;
         let min_indexed_value = f64::max(0.0, index_mapping.min_indexable_value());

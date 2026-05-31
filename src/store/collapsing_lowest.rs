@@ -217,12 +217,8 @@ impl Store for CollapsingLowestDenseStore {
             return;
         }
 
-        let array_index = serde::i32_to_usize_exact(self.normalize(index));
-        match array_index {
-            Ok(index) => {
-                self.counts[index] += count;
-            }
-            _ => {}
+        if let Ok(index) = serde::i32_to_usize_exact(self.normalize(index)) {
+            self.counts[index] += count;
         }
     }
 
@@ -230,12 +226,8 @@ impl Store for CollapsingLowestDenseStore {
         if bin.1 == 0.0 {
             return;
         }
-        let array_index = serde::i32_to_usize_exact(self.normalize(bin.0));
-        match array_index {
-            Ok(index) => {
-                self.counts[index] += bin.1;
-            }
-            _ => {}
+        if let Ok(index) = serde::i32_to_usize_exact(self.normalize(bin.0)) {
+            self.counts[index] += bin.1;
         }
     }
 

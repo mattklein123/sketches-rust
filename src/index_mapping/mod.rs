@@ -19,7 +19,7 @@ impl IndexMapping {
                 _index_offset,
                 _multiplier,
                 _relative_accuracy,
-            ) => IndexMappingLayout::LOG,
+            ) => IndexMappingLayout::Log,
         }
     }
 
@@ -142,14 +142,14 @@ impl IndexMapping {
         index_layout: IndexMappingLayout,
         relative_accuracy: f64,
     ) -> Result<IndexMapping, Error> {
-        if relative_accuracy <= 0.0 || relative_accuracy >= 1.0 {
+        if !relative_accuracy.is_finite() || relative_accuracy <= 0.0 || relative_accuracy >= 1.0 {
             return Err(Error::InvalidArgument(
                 "The relative accuracy must be between 0 and 1.",
             ));
         }
 
         match index_layout {
-            IndexMappingLayout::LOG => {
+            IndexMappingLayout::Log => {
                 if relative_accuracy <= 0.0 || relative_accuracy >= 1.0 {
                     return Err(Error::InvalidArgument(
                         "The relative accuracy must be between 0 and 1.",
@@ -177,8 +177,17 @@ impl IndexMapping {
         index_offset: f64,
     ) -> Result<IndexMapping, Error> {
         match index_layout {
-            IndexMappingLayout::LOG => {
+            IndexMappingLayout::Log => {
+                if !gamma.is_finite() || gamma <= 1.0 {
+                    return Err(Error::InvalidArgument("Invalid gamma."));
+                }
+                if !index_offset.is_finite() {
+                    return Err(Error::InvalidArgument("Invalid index offset."));
+                }
                 let multiplier = LOGARITHMIC_MAPPING_BASE.ln() / gamma.ln();
+                if !multiplier.is_finite() || multiplier == 0.0 {
+                    return Err(Error::InvalidArgument("Invalid gamma multiplier."));
+                }
                 let relative_accuracy =
                     calculate_relative_accuracy(gamma, LOGARITHMIC_MAPPING_CORRECTING_FACTOR);
                 Ok(IndexMapping::LogarithmicMapping(
@@ -192,15 +201,16 @@ impl IndexMapping {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum IndexMappingLayout {
-    LOG = 0,
+    Log = 0,
 }
 
 impl IndexMappingLayout {
     pub fn of_flag(flag: &Flag) -> Result<IndexMappingLayout, Error> {
         let index = flag.get_marker() >> 2;
         match index {
-            0 => Ok(IndexMappingLayout::LOG),
+            0 => Ok(IndexMappingLayout::Log),
             _ => Err(Error::InvalidArgument("Unknown Index Flag.")),
         }
     }
@@ -224,7 +234,7 @@ fn calculate_gamma(relative_accuracy: f64, correcting_factor: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use crate::index_mapping::IndexMapping;
-    use crate::index_mapping::IndexMappingLayout::LOG;
+    use crate::index_mapping::IndexMappingLayout::Log;
 
     const TEST_GAMMAS: [f64; 3] = [1.0 + 1e-6, 1.02, 1.5];
     const TEST_INDEX_OFFSETS: [f64; 4] = [0.0, 1.0, -12.23, 7768.3];
@@ -235,7 +245,7 @@ mod tests {
         for gamma in TEST_GAMMAS {
             for index_offset in TEST_INDEX_OFFSETS {
                 let index_mapping =
-                    IndexMapping::with_gamma_offset(LOG, gamma, index_offset).unwrap();
+                    IndexMapping::with_gamma_offset(Log, gamma, index_offset).unwrap();
                 let index_of1 = index_mapping.index(1.0) as f64;
                 // If 1 is on a bucket boundary, its associated index can be either of the ones of the previous
                 // and the next buckets.
@@ -262,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_logarithmic_mapping_validity() {
-        let mapping = IndexMapping::with_relative_accuracy(LOG, 1e-2).unwrap();
+        let mapping = IndexMapping::with_relative_accuracy(Log, 1e-2).unwrap();
 
         println!("LogarithmicMapping: {:?}", mapping);
 
@@ -299,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_logarithmic_mapping_index() {
-        let mapping = IndexMapping::with_relative_accuracy(LOG, 2e-2).unwrap();
+        let mapping = IndexMapping::with_relative_accuracy(Log, 2e-2).unwrap();
         let values: Vec<f64> = vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
             17.0, 18.0, 19.0, 228.0, 484.0, 499.0, 559.0, 584.0, 629.0, 722.0, 730.0, 777.0, 805.0,

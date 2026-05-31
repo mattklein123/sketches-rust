@@ -9,6 +9,33 @@ use crate::output::Output;
 use crate::sketch::{Flag, FlagType};
 pub use collapsing_lowest::CollapsingLowestDenseStore;
 
+const MAX_BINS_DESERIALIZE: i64 = 65_536;
+const MAX_KEY_RANGE: i64 = 65_536;
+
+fn validate_bin_count(count: f64) -> Result<(), Error> {
+    if !count.is_finite() || count < 0.0 {
+        return Err(Error::InvalidArgument("Invalid bin count."));
+    }
+
+    Ok(())
+}
+
+fn validate_num_bins(num_bins: i64) -> Result<(), Error> {
+    if !(0..=MAX_BINS_DESERIALIZE).contains(&num_bins) {
+        return Err(Error::InvalidArgument("Invalid number of bins."));
+    }
+
+    Ok(())
+}
+
+fn validate_key_range(min_index: i64, max_index: i64) -> Result<(), Error> {
+    if max_index - min_index + 1 > MAX_KEY_RANGE {
+        return Err(Error::InvalidArgument("Store key range is too large."));
+    }
+
+    Ok(())
+}
+
 pub trait Store: Send + Sync {
     fn add(&mut self, index: i32, count: f64);
     fn add_bin(&mut self, bin: (i32, f64));
@@ -34,9 +61,20 @@ pub trait Store: Send + Sync {
             return Ok(());
         }
 
+        if self.is_empty() {
+            BinEncodingMode::ContiguousCounts
+                .to_flag(FlagType::SketchFeatures)
+                .encode(output)?;
+            serde::encode_unsigned_var_long(output, 0)?;
+            serde::encode_signed_var_long(output, 0)?;
+            serde::encode_signed_var_long(output, 1)?;
+            return Ok(());
+        }
+
         let min_index = self.get_min_index();
         let max_index = self.get_max_index();
         let offset = self.get_offset();
+        validate_key_range(min_index.into(), max_index.into())?;
 
         let mut dense_encoding_size: i64 = 0;
         let num_bins: i64 = max_index as i64 - min_index as i64 + 1;
@@ -50,6 +88,7 @@ pub trait Store: Send + Sync {
 
         for i in min_index - offset..max_index - offset + 1 {
             let count = self.get_count(i);
+            validate_bin_count(count)?;
             let count_var_double_encoded_length = serde::var_double_encoded_length(count);
             dense_encoding_size += count_var_double_encoded_length;
             if count != 0.0 {
@@ -120,8 +159,11 @@ pub trait Store: Send + Sync {
         match mode {
             BinEncodingMode::IndexDeltasAndCounts => {
                 let num_bins = serde::decode_unsigned_var_long(input)?;
+                validate_num_bins(num_bins)?;
                 let mut index: i64 = 0;
                 let mut i = 0;
+                let mut min_index = i64::MAX;
+                let mut max_index = i64::MIN;
                 while i < num_bins {
                     let index_delta = serde::decode_signed_var_long(input)?;
                     let count = if clickhouse {
@@ -129,8 +171,14 @@ pub trait Store: Send + Sync {
                     } else {
                         serde::decode_var_double(input)?
                     };
+                    validate_bin_count(count)?;
                     index += index_delta;
-                    self.add(serde::i64_to_i32_exact(index)?, count);
+                    if count > 0.0 {
+                        min_index = min_index.min(index);
+                        max_index = max_index.max(index);
+                        validate_key_range(min_index, max_index)?;
+                        self.add(serde::i64_to_i32_exact(index)?, count);
+                    }
                     i += 1;
                 }
 
@@ -144,11 +192,17 @@ pub trait Store: Send + Sync {
                     ));
                 }
                 let num_bins = serde::decode_unsigned_var_long(input)?;
+                validate_num_bins(num_bins)?;
                 let mut index: i64 = 0;
                 let mut i = 0;
+                let mut min_index = i64::MAX;
+                let mut max_index = i64::MIN;
                 while i < num_bins {
                     let index_delta = serde::decode_signed_var_long(input)?;
                     index += index_delta;
+                    min_index = min_index.min(index);
+                    max_index = max_index.max(index);
+                    validate_key_range(min_index, max_index)?;
                     self.add(serde::i64_to_i32_exact(index)?, 1.0);
                     i += 1;
                 }
@@ -159,6 +213,17 @@ pub trait Store: Send + Sync {
                 let num_bins = serde::decode_unsigned_var_long(input)?;
                 let mut index: i64 = serde::decode_signed_var_long(input)?;
                 let index_delta = serde::decode_signed_var_long(input)?;
+                validate_num_bins(num_bins)?;
+                if num_bins > 0 {
+                    let end_index = index
+                        .checked_add(
+                            index_delta
+                                .checked_mul(num_bins - 1)
+                                .ok_or(Error::InvalidArgument("Invalid store key range."))?,
+                        )
+                        .ok_or(Error::InvalidArgument("Invalid store key range."))?;
+                    validate_key_range(index.min(end_index), index.max(end_index))?;
+                }
 
                 let mut i = 0;
                 while i < num_bins {
@@ -167,7 +232,10 @@ pub trait Store: Send + Sync {
                     } else {
                         serde::decode_var_double(input)?
                     };
-                    self.add(serde::i64_to_i32_exact(index)?, count);
+                    validate_bin_count(count)?;
+                    if count > 0.0 {
+                        self.add(serde::i64_to_i32_exact(index)?, count);
+                    }
                     index += index_delta;
                     i += 1;
                 }
@@ -215,7 +283,7 @@ impl<'a> StoreIter<'a> {
         offset: i32,
         desc: bool,
         counts: &'a [f64],
-    ) -> StoreIter<'_> {
+    ) -> StoreIter<'a> {
         StoreIter {
             desc,
             min_index,
@@ -269,6 +337,7 @@ impl<'a> Iterator for StoreIter<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum BinEncodingMode {
     IndexDeltasAndCounts = 1,
     IndexDeltas = 2,
